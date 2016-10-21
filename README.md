@@ -1,1 +1,1 @@
-# cppstuff
+A collection of C++ snippets and tests
