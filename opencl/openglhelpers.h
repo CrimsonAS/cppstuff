@@ -1,7 +1,12 @@
 #pragma once
 
-#include <GL/glew.h>
-#include <GLFW/glfw3.h>
+#if !defined(NO_GLEW)
+#  include <GL/glew.h>
+#endif
+
+#if !defined(NO_GLFW)
+#  include <GLFW/glfw3.h>
+#endif
 
 #ifdef __APPLE__
 #include <OpenGL/OpenGL.h>
