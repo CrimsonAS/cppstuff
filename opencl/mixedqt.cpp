@@ -1,0 +1,420 @@
+#define GL_GLEXT_PROTOTYPES 1
+#include <QtGui>
+
+#define NO_GLEW
+#define NO_GLFW
+#include "openglhelpers.h"
+
+#include "openclhelpers.h"
+#include "ioutils.h"
+
+#include <iostream>
+#include <cmath>
+
+
+using namespace std;
+
+#define USE_FRAMEBUFFER
+// #define USE_EXTRA_TEXTURE
+
+// Ensure framebuffer is used when USE_EXTRA_TEXTURE is used.
+#if defined(USE_EXTRA_TEXTURE) && !defined(USE_FRAMEBUFFER)
+#define USE_FRAMEBUFFER
+#endif
+
+// Globals, put here for convenience...
+
+// GLFW (windowing stuff)
+static QWindow *window;
+static QOpenGLContext *gl;
+
+static void render();
+
+class GLWindow : public QWindow
+{
+public:
+    bool event(QEvent *e) {
+        if (e->type() == QEvent::UpdateRequest)
+            render();
+        return QWindow::event(e);
+    }
+};
+
+// OpenGL
+#if defined(USE_FRAMEBUFFER)
+static GLuint framebuffer;
+#endif
+#if defined(USE_EXTRA_TEXTURE)
+static GLuint extraTexture;
+#endif
+static GLuint framebufferTexture;
+static GLuint resultTexture;
+static GLuint fractalProgram;
+static GLuint fractalUniformC;
+static GLuint textureQuadBuffer;
+static GLuint blitProgram;
+
+// OpenCL
+static struct {
+    cl_device_id device;
+    cl_context context;
+    cl_command_queue commandQueue;
+    cl_mem sourceImage;
+    cl_mem targetImage;
+    cl_program program;
+    cl_kernel kernel;
+} cl;
+
+static void openclErrorCallback(const char *errinfo, const void *, size_t, void *)
+{
+    cout << "CL ERROR: '" << errinfo << "'" << endl;
+}
+
+static void initialize_opencl() {
+
+    // OpenCL setup
+    cl_platform_id platforms[16];
+    cl_uint platformCount;
+    clGetPlatformIDs(16, platforms, &platformCount);
+    cout << "OpenCL Platforms found: " << platformCount << endl;
+    assert(platformCount > 0);
+
+    cl_uint deviceCount = 0;
+    clGetDeviceIDs(platforms[0], CL_DEVICE_TYPE_GPU, 1, &cl.device, &deviceCount);
+    assert(deviceCount);
+    cout << "OpenCL GPU devices found: " << deviceCount << endl;
+
+    DUMP_CL_DEVICE_STRING_OPTION(cl.device, CL_DEVICE_NAME);
+    DUMP_CL_DEVICE_STRING_OPTION(cl.device, CL_DEVICE_VENDOR);
+    DUMP_CL_DEVICE_STRING_OPTION(cl.device, CL_DEVICE_VERSION);
+    DUMP_CL_DEVICE_STRING_OPTION(cl.device, CL_DRIVER_VERSION);
+    DUMP_CL_DEVICE_BOOL_OPTION(cl.device, CL_DEVICE_AVAILABLE);
+    DUMP_CL_DEVICE_BOOL_OPTION(cl.device, CL_DEVICE_COMPILER_AVAILABLE);
+    DUMP_CL_DEVICE_INT_OPTION(cl.device, CL_DEVICE_MAX_COMPUTE_UNITS);
+    DUMP_CL_DEVICE_INT_OPTION(cl.device, CL_DEVICE_MAX_CLOCK_FREQUENCY);
+    DUMP_CL_DEVICE_ULONG_OPTION(cl.device, CL_DEVICE_LOCAL_MEM_SIZE);
+    DUMP_CL_DEVICE_ULONG_OPTION(cl.device, CL_DEVICE_GLOBAL_MEM_SIZE);
+    DUMP_CL_DEVICE_INT_OPTION(cl.device, CL_DEVICE_MAX_WORK_ITEM_DIMENSIONS);
+    DUMP_CL_DEVICE_STRING_OPTION(cl.device, CL_DEVICE_EXTENSIONS);
+
+    cout << "OpenCL Objects:" << endl;
+
+    // OpenCL context
+    cl_int error;
+#ifdef __APPLE__
+    CGLContextObj kCGLContext = CGLGetCurrentContext();
+    CGLShareGroupObj kCGLShareGroup = CGLGetShareGroup(kCGLContext);
+    cl_context_properties clProperties[] =
+    {
+        CL_CONTEXT_PROPERTY_USE_CGL_SHAREGROUP_APPLE, (cl_context_properties)kCGLShareGroup,
+        0
+    };
+#else
+     cl_context_properties clProperties[] = {
+        CL_GL_CONTEXT_KHR, (cl_context_properties) glXGetCurrentContext(),
+        CL_GLX_DISPLAY_KHR, (cl_context_properties) glXGetCurrentDisplay(),
+        0
+    };
+#endif
+    cl.context = clCreateContext(clProperties, 1, &cl.device, openclErrorCallback, 0, &error);
+    CL_CHECK_ERROR(error);
+    cout << " - context ............: " << cl.context << endl;
+
+    // OpenCL command queue...
+    cl.commandQueue = clCreateCommandQueue(cl.context, cl.device, CL_QUEUE_PROFILING_ENABLE, &error);
+    CL_CHECK_ERROR(error);
+    cout << " - command queue ......: " << cl.commandQueue << endl;
+
+    cl.sourceImage = clCreateFromGLTexture(cl.context, CL_MEM_READ_ONLY, GL_TEXTURE_2D, 0,
+#if defined(USE_EXTRA_TEXTURE)
+        extraTexture,
+#else
+        framebufferTexture,
+#endif
+        &error);
+    CL_CHECK_ERROR(error);
+    cout << " - source image mem ...: " << cl.sourceImage << endl;
+    cl.targetImage = clCreateFromGLTexture(cl.context, CL_MEM_WRITE_ONLY, GL_TEXTURE_2D, 0, resultTexture, &error);
+    CL_CHECK_ERROR(error);
+    cout << " - target image mem ...: " << cl.targetImage << endl;
+
+    string source = io_read_file("mixed.cl");
+    const char *sources[] = { source.c_str() };
+    cl.program = clCreateProgramWithSource(cl.context, 1, sources, 0, &error);
+    CL_CHECK_ERROR(error);
+
+    error = clBuildProgram(cl.program, 0, 0, 0, 0, 0);
+    if (error != CL_SUCCESS) {
+        size_t len;
+        char buffer[2048];
+        clGetProgramBuildInfo(cl.program, cl.device, CL_PROGRAM_BUILD_LOG, sizeof(buffer), buffer, &len);
+        cout << buffer << endl;
+    }
+    CL_CHECK_ERROR(error);
+    cout << " - program ............: " << cl.program << endl;
+
+    cl.kernel = clCreateKernel(cl.program, "glowthing", &error);
+    CL_CHECK_ERROR(error);
+    cout << " - 'invert' kernel ....: " << cl.kernel << endl;
+
+}
+
+static void initialize_opengl()
+{
+    // Window setup
+    window = new GLWindow();
+    window->setSurfaceType(QWindow::OpenGLSurface);
+    window->resize(800, 480);
+    window->setMaximumSize(QSize(800, 480));
+    window->setMinimumSize(QSize(800, 480));
+    window->create();
+    cout << "QWindow .......: " << window << "; size=" << window->width() << "," << window->height() << endl;
+
+    // OpenGL setup
+    gl = new QOpenGLContext();
+    gl->setFormat(window->format());
+    gl->create();
+
+    if (!gl->makeCurrent(window)) {
+        qFatal("failed to make GL current...");
+    }
+
+    cout << "OpenGL Context is current!" << endl;
+    cout << "GL_RENDERER ...: " << glGetString(GL_RENDERER) << endl;
+    cout << "GL_VENDOR .....: " << glGetString(GL_VENDOR) << endl;
+    cout << "GL_VERSION ....: " << glGetString(GL_VERSION) << endl;
+    cout << "GL_EXTENSIONS .: " << glGetString(GL_EXTENSIONS) << endl;
+    cout << endl;
+
+    cout << "OpenGL Objects:" << endl;
+
+#if defined(USE_FRAMEBUFFER)
+    framebuffer = gl_create_framebufferobject(window->width(), window->height(), &framebufferTexture);
+    cout << " - framebuffer .......: " << framebuffer
+         << " (texture=" << framebufferTexture << ")" << endl;
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+#else
+    int *textureBits = new int[window->width() * window->height()];
+    for (int y=0; y<window->height(); ++y) {
+        for (int x=0; x<window->width(); ++x) {
+            textureBits[x + window->width() * y] = (0xff00000f) | ((x&0xff) << 8) | ((y&0xff) << 16);
+        }
+    }
+    framebufferTexture = gl_create_texture(window->width(), window->height(), textureBits);
+#endif
+
+#if defined(USE_EXTRA_TEXTURE)
+    extraTexture = gl_create_texture(window->width(), window->height());
+#endif
+
+    const char *fractalAttributes[] = { "aV", "aTC", 0 };
+    fractalProgram = gl_create_program(// Vertex Shader
+                                      "\n attribute vec4 aV;"
+                                      "\n attribute vec2 aTC;"
+                                      "\n varying vec2 vTC;"
+                                      "\n void main() {"
+                                      "\n     gl_Position = aV;"
+                                      "\n     vTC = 3.0 * (aTC - 0.5);"
+                                      "\n }",
+                                      // Fragment Shader
+                                      "\n uniform vec2 c;"
+                                      "\n varying vec2 vTC;"
+                                      "\n #define ITERATIONS 50"
+                                      "\n void main() {"
+                                      "\n      vec2 z = vTC;"
+                                      "\n     int i;"
+                                      "\n     for (i=0; i<ITERATIONS; ++i) {"
+                                      "\n         float x = (z.x * z.x - z.y * z.y) + c.x;"
+                                      "\n         float y = (z.y * z.x + z.x * z.y) + c.y;"
+                                      "\n         if (x*x + y*y > 4.0) break;"
+                                      "\n         z = vec2(x,y);"
+                                      "\n     }"
+                                      "\n     float v = i == ITERATIONS ? 0.0 : pow(float(i) / float(ITERATIONS), 0.5);"
+                                      "\n     gl_FragColor = vec4(v * vec3(v, v*v, 1), 1);"
+                                      "\n }",
+                                      fractalAttributes);
+    cout << " - fractal shader ....: " << fractalProgram << endl;
+
+    const char *blitAttributes[] = { "aV", "aTC", 0 };
+    blitProgram = gl_create_program(// Vertex Shader
+                                    "\n attribute vec2 aV;"
+                                    "\n attribute vec2 aTC;"
+                                    "\n varying vec2 vTC;"
+                                    "\n void main() {"
+                                    "\n     gl_Position = vec4(aV, 0, 1);"
+                                    "\n     vTC = aTC;"
+                                    "\n }",
+                                    // Fragment Shader
+                                    "\n uniform sampler2D T;"
+                                    "\n varying vec2 vTC;"
+                                    "\n void main() {"
+                                    "\n     gl_FragColor = texture2D(T, vTC);"
+                                    "\n }",
+                                    blitAttributes);
+    cout << " - blit shader .......: " << blitProgram << endl;
+
+    glGenBuffers(1, &textureQuadBuffer);
+    glBindBuffer(GL_ARRAY_BUFFER, textureQuadBuffer);
+    float data[] = { -1,  1,   0, 0,
+                     -1, -1,   0, 1,
+                      0,  1, 0.5, 0,
+                      0, -1, 0.5, 1,
+                      1,  1,   1, 0,
+                      1, -1,   1, 1 };
+    glBufferData(GL_ARRAY_BUFFER, sizeof(data), data, GL_STATIC_DRAW);
+    cout << " - vertex buffer .....: " << textureQuadBuffer << endl;
+
+    // We only use these
+    glEnableVertexAttribArray(0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 4, 0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 4, (void *) (sizeof(float) * 2));
+
+    resultTexture = gl_create_texture(window->width(), window->height(), 0);
+    cout << " - result texture ....: " << resultTexture << endl;
+
+    cout << endl;
+
+    glFinish();
+}
+
+#if defined(USE_FRAMEBUFFER)
+static void renderToFramebuffer()
+{
+    // Prepare to draw frame, initial setup..
+    glViewport(0, 0, window->width(), window->height());
+    glClearColor(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    // Render the fractal to the FBO
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    glUseProgram(fractalProgram);
+    static double t = 0;
+    t += 0.01;
+    float cx = sin(t) * 0.5;
+    float cy = cos(t);
+    glUniform2f(fractalUniformC, cx, cy);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 6);
+
+#if defined(USE_EXTRA_TEXTURE)
+    glBindTexture(GL_TEXTURE_2D, extraTexture);
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, window->width(), window->height(), 0);
+#endif
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    // // Render the FBO to the screen..
+    // // attribute arrays and buffer can be reused, so leave them be
+    // glBindTexture(GL_TEXTURE_2D, framebufferTexture);
+    // glUseProgram(blitProgram);
+    // glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+
+    // Reset to default state
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glUseProgram(0);
+}
+#endif
+
+static void renderResultTexture()
+{
+    glUseProgram(blitProgram);
+
+#if defined(USE_EXTRA_TEXTURE)
+    glBindTexture(GL_TEXTURE_2D, extraTexture);
+#else
+    glBindTexture(GL_TEXTURE_2D, framebufferTexture);
+#endif
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+    glBindTexture(GL_TEXTURE_2D, resultTexture);
+    glDrawArrays(GL_TRIANGLE_STRIP, 2, 4);
+
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glUseProgram(0);
+}
+
+static void runOpenCLKernel()
+{
+    cl_int status;
+    cl_mem textures[] = { cl.sourceImage, cl.targetImage };
+    status = clEnqueueAcquireGLObjects(cl.commandQueue, 2, textures, 0, 0, 0);
+    CL_CHECK_ERROR(status);
+
+    status = clSetKernelArg(cl.kernel, 0, sizeof(cl_mem), (void *) &cl.sourceImage);
+    CL_CHECK_ERROR(status);
+    status = clSetKernelArg(cl.kernel, 1, sizeof(cl_mem), (void *) &cl.targetImage);
+    CL_CHECK_ERROR(status);
+
+    static int counter = 300;
+    bool profile = false;
+    --counter;
+    if (counter < 0) {
+        counter = 300;
+        profile = true;
+    }
+
+    cl_event event;
+    size_t dim[] = { window->width(), window->height() };
+    status = clEnqueueNDRangeKernel(cl.commandQueue, cl.kernel, 2, 0, dim, 0, 0, 0, profile ? &event : 0);
+    CL_CHECK_ERROR(status);
+
+    status = clEnqueueReleaseGLObjects(cl.commandQueue, 2, textures, 0, 0, 0);
+    CL_CHECK_ERROR(status);
+
+    if (profile) {
+        status = clWaitForEvents(1, &event);
+        CL_CHECK_ERROR(status);
+        cl_ulong start, end;
+        clGetEventProfilingInfo(event, CL_PROFILING_COMMAND_START, sizeof(start), &start, NULL);
+        clGetEventProfilingInfo(event, CL_PROFILING_COMMAND_END, sizeof(end), &end, NULL);
+        cout << "kernel exectued in: " << (end - start) / 1000 << "." << ((end - start) % 1000) << " us" << endl;
+    }
+
+    status = clFinish(cl.commandQueue);
+    CL_CHECK_ERROR(status);
+}
+
+static void render()
+{
+    bool ok = gl->makeCurrent(window);
+    if (!ok) {
+        cout << "render: failed to make current..." << endl;
+        return;
+    }
+
+#if defined(USE_FRAMEBUFFER)
+    renderToFramebuffer();
+    glFinish();
+#endif
+
+    runOpenCLKernel();
+
+    renderResultTexture();
+
+    window->requestUpdate();
+    gl->swapBuffers(window);
+}
+
+int main(int argc, char *argv[])
+{
+    QGuiApplication app(argc, argv);
+
+    initialize_opengl();
+    initialize_opencl();
+
+#if defined(USE_FRAMEBUFFER)
+    cout << "Feature: Rendering to Framebuffer" << endl;
+#endif
+#if defined(USE_EXTRA_TEXTURE)
+    cout << "Feature: Using an extra texture" << endl;
+#endif
+
+    window->show();
+    window->requestUpdate();
+
+    return app.exec();
+}
+
