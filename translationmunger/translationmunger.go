@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/xml"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -39,32 +40,67 @@ type TsDocument struct {
 	Contexts []TsContext `xml:"context"`
 }
 
-func main() {
-	fileName := "foobar.ts"
-	xmlFile, err := os.Open(fileName)
-	if err != nil {
-		panic(fmt.Sprintf("Error opening file: %s", err))
-	}
-	defer xmlFile.Close()
+var reverseMode = flag.Bool("reverse", false, "reverse strings")
+var longMode = flag.Bool("long", false, "long strings")
 
-	b, _ := ioutil.ReadAll(xmlFile)
+func main() {
+	outPath := flag.String("o", "", "output filename (default overwrites input)")
+	flag.Parse()
+	inputPaths := flag.Args()
+
+	if len(inputPaths) < 1 || (!*reverseMode && !*longMode) {
+		fmt.Fprintf(os.Stderr, "Usage: %s [-reverse|-long] [flags] input\n", os.Args[0])
+		flag.PrintDefaults()
+		os.Exit(1)
+	}
+
+	for _, path := range inputPaths {
+		opath := *outPath
+		if opath == "" {
+			opath = path
+		}
+
+		if err := MungeTSFile(path, opath); err != nil {
+			fmt.Fprintf(os.Stderr, "error processing '%s': %s\n", path, err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("munged %s to %s\n", path, opath)
+	}
+}
+
+func MungeTSFile(inPath, outPath string) error {
+	b, err := ioutil.ReadFile(inPath)
+	if err != nil {
+		return err
+	}
 
 	var ts TsDocument
 	xml.Unmarshal(b, &ts)
 
 	for idx := range ts.Contexts {
 		for midx := range ts.Contexts[idx].Message {
+			message := &ts.Contexts[idx].Message[midx]
+
 			// This MungeLikeTS might be unnecessary (done below). I forget.
-			ts.Contexts[idx].Message[midx].Source = MungeLikeTS(ts.Contexts[idx].Message[midx].Source)
+			message.Source = MungeLikeTS(message.Source)
 
 			// Mark it unfinished
-			ts.Contexts[idx].Message[midx].Translation.Type = "unfinished"
+			message.Translation.Type = "unfinished"
+
+			translationText := message.Source
 
 			// Reverse it...
-			ts.Contexts[idx].Message[midx].Translation.Text = Reverse(ts.Contexts[idx].Message[midx].Source)
+			if *reverseMode {
+				translationText = Reverse(translationText)
+			}
 
 			// Make the translation really long...
-			//ts.Contexts[idx].Message[midx].Translation.Text = ts.Contexts[idx].Message[midx].Translation.Text + ts.Contexts[idx].Message[midx].Translation.Text + ts.Contexts[idx].Message[midx].Translation.Text
+			if *longMode {
+				translationText = translationText + translationText + translationText
+			}
+
+			message.Translation.Text = translationText
 		}
 	}
 
@@ -77,14 +113,13 @@ func main() {
 	header := []byte("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n")
 	header = append(header, []byte("<!DOCTYPE TS>\n")...)
 	buf = append(header, buf...)
-
 	buf = []byte(MungeLikeTS(string(buf)))
 
-	err = ioutil.WriteFile(fileName, buf, 0644)
-	if err != nil {
-		panic("Error writing file")
+	if err := ioutil.WriteFile(outPath, buf, 0644); err != nil {
+		return err
 	}
 
+	return nil
 }
 
 func MungeLikeTS(s string) string {
@@ -94,33 +129,32 @@ func MungeLikeTS(s string) string {
 func Reverse(s string) string {
 	ret := make([]byte, len(s))
 
-	for idx := 0; idx < len(s); idx++ {
-		c := s[idx]
-		if c == '%' {
-			start := idx // the %code starts here
-			idx += 1     // skip % symbol
-			for ; idx < len(s); idx++ {
-				nc := s[idx]
-				if (nc <= '0' || nc >= '9') && nc != 'L' {
-					// probably the end of the sequence
-					break
-				}
-			}
+	codeStart := -1
 
-			// the %code ends at 'idx'
-			thing := s[start:idx]
-
-			// we want to write 'thing' un-reversed into the position ret[i
-			for nidx := 0; nidx < len(thing); nidx++ {
-				ret[len(s)-(idx-nidx)] = thing[nidx]
+	for idx, c := range s {
+		if codeStart >= 0 {
+			if (c <= '0' || c >= '9') && c != 'L' {
+				// end of code sequence
+				copy(ret[len(ret)-idx:], s[codeStart:idx])
+				codeStart = -1
+			} else {
+				// skip until the end of the sequence
+				continue
 			}
-
-			if idx < len(s) {
-				ret[len(s)-1-idx] = s[idx]
-			}
-		} else {
-			ret[len(s)-1-idx] = c
 		}
+		if codeStart < 0 && c == '%' {
+			codeStart = idx
+			continue
+		}
+
+		cb := []byte(string(c))
+
+		// Copy the rune into its reversed position. If the rune is multiple bytes,
+		// those bytes will not be reversed.
+		copy(ret[len(ret)-len(cb)-idx:], cb)
+	}
+	if codeStart >= 0 {
+		copy(ret, s[codeStart:])
 	}
 
 	return string(ret)
