@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/xml"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -39,32 +40,67 @@ type TsDocument struct {
 	Contexts []TsContext `xml:"context"`
 }
 
-func main() {
-	fileName := "foobar.ts"
-	xmlFile, err := os.Open(fileName)
-	if err != nil {
-		panic(fmt.Sprintf("Error opening file: %s", err))
-	}
-	defer xmlFile.Close()
+var reverseMode = flag.Bool("reverse", false, "reverse strings")
+var longMode = flag.Bool("long", false, "long strings")
 
-	b, _ := ioutil.ReadAll(xmlFile)
+func main() {
+	outPath := flag.String("o", "", "output filename (default overwrites input)")
+	flag.Parse()
+	inputPaths := flag.Args()
+
+	if len(inputPaths) < 1 || (!*reverseMode && !*longMode) {
+		fmt.Fprintf(os.Stderr, "Usage: %s [-reverse|-long] [flags] input\n", os.Args[0])
+		flag.PrintDefaults()
+		os.Exit(1)
+	}
+
+	for _, path := range inputPaths {
+		opath := *outPath
+		if opath == "" {
+			opath = path
+		}
+
+		if err := MungeTSFile(path, opath); err != nil {
+			fmt.Fprintf(os.Stderr, "error processing '%s': %s\n", path, err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("munged %s to %s\n", path, opath)
+	}
+}
+
+func MungeTSFile(inPath, outPath string) error {
+	b, err := ioutil.ReadFile(inPath)
+	if err != nil {
+		return err
+	}
 
 	var ts TsDocument
 	xml.Unmarshal(b, &ts)
 
 	for idx := range ts.Contexts {
 		for midx := range ts.Contexts[idx].Message {
+			message := &ts.Contexts[idx].Message[midx]
+
 			// This MungeLikeTS might be unnecessary (done below). I forget.
-			ts.Contexts[idx].Message[midx].Source = MungeLikeTS(ts.Contexts[idx].Message[midx].Source)
+			message.Source = MungeLikeTS(message.Source)
 
 			// Mark it unfinished
-			ts.Contexts[idx].Message[midx].Translation.Type = "unfinished"
+			message.Translation.Type = "unfinished"
+
+			translationText := message.Source
 
 			// Reverse it...
-			ts.Contexts[idx].Message[midx].Translation.Text = Reverse(ts.Contexts[idx].Message[midx].Source)
+			if *reverseMode {
+				translationText = Reverse(translationText)
+			}
 
 			// Make the translation really long...
-			//ts.Contexts[idx].Message[midx].Translation.Text = ts.Contexts[idx].Message[midx].Translation.Text + ts.Contexts[idx].Message[midx].Translation.Text + ts.Contexts[idx].Message[midx].Translation.Text
+			if *longMode {
+				translationText = translationText + translationText + translationText
+			}
+
+			message.Translation.Text = translationText
 		}
 	}
 
@@ -77,14 +113,13 @@ func main() {
 	header := []byte("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n")
 	header = append(header, []byte("<!DOCTYPE TS>\n")...)
 	buf = append(header, buf...)
-
 	buf = []byte(MungeLikeTS(string(buf)))
 
-	err = ioutil.WriteFile(fileName, buf, 0644)
-	if err != nil {
-		panic("Error writing file")
+	if err := ioutil.WriteFile(outPath, buf, 0644); err != nil {
+		return err
 	}
 
+	return nil
 }
 
 func MungeLikeTS(s string) string {
