@@ -129,33 +129,32 @@ func MungeLikeTS(s string) string {
 func Reverse(s string) string {
 	ret := make([]byte, len(s))
 
-	for idx := 0; idx < len(s); idx++ {
-		c := s[idx]
-		if c == '%' {
-			start := idx // the %code starts here
-			idx += 1     // skip % symbol
-			for ; idx < len(s); idx++ {
-				nc := s[idx]
-				if (nc <= '0' || nc >= '9') && nc != 'L' {
-					// probably the end of the sequence
-					break
-				}
-			}
+	codeStart := -1
 
-			// the %code ends at 'idx'
-			thing := s[start:idx]
-
-			// we want to write 'thing' un-reversed into the position ret[i
-			for nidx := 0; nidx < len(thing); nidx++ {
-				ret[len(s)-(idx-nidx)] = thing[nidx]
+	for idx, c := range s {
+		if codeStart >= 0 {
+			if (c <= '0' || c >= '9') && c != 'L' {
+				// end of code sequence
+				copy(ret[len(ret)-idx:], s[codeStart:idx])
+				codeStart = -1
+			} else {
+				// skip until the end of the sequence
+				continue
 			}
-
-			if idx < len(s) {
-				ret[len(s)-1-idx] = s[idx]
-			}
-		} else {
-			ret[len(s)-1-idx] = c
 		}
+		if codeStart < 0 && c == '%' {
+			codeStart = idx
+			continue
+		}
+
+		cb := []byte(string(c))
+
+		// Copy the rune into its reversed position. If the rune is multiple bytes,
+		// those bytes will not be reversed.
+		copy(ret[len(ret)-len(cb)-idx:], cb)
+	}
+	if codeStart >= 0 {
+		copy(ret, s[codeStart:])
 	}
 
 	return string(ret)
