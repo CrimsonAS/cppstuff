@@ -53,9 +53,66 @@ void release(int fd, int code, Options options = Options::Log) {
   }
 }
 
-void click(int fd, int code, Options options = Options::Log) {
+enum Modifiers {
+  NoMods = 0x00,
+  LeftShift = 0x01,
+  RightShift = 0x02,
+  LeftAlt = 0x04,
+  RightAlt = 0x08,
+  LeftCtrl = 0x10,
+  RightCtrl = 0x20,
+  Meta = 0x40,
+};
+
+void click(int fd, int code, Modifiers modifiers = Modifiers::NoMods,
+           Options options = Options::Log) {
+  if (modifiers & Modifiers::LeftShift) {
+    press(fd, KEY_LEFTSHIFT, Options::None);
+  }
+  if (modifiers & Modifiers::RightShift) {
+    press(fd, KEY_RIGHTSHIFT, Options::None);
+  }
+  if (modifiers & Modifiers::LeftAlt) {
+    press(fd, KEY_LEFTALT, Options::None);
+  }
+  if (modifiers & Modifiers::RightAlt) {
+    press(fd, KEY_RIGHTALT, Options::None);
+  }
+  if (modifiers & Modifiers::LeftCtrl) {
+    press(fd, KEY_LEFTCTRL, Options::None);
+  }
+  if (modifiers & Modifiers::RightCtrl) {
+    press(fd, KEY_RIGHTCTRL, Options::None);
+  }
+  if (modifiers & Modifiers::Meta) {
+    press(fd, KEY_OPTION, Options::None);
+  }
+
   press(fd, code, Options::None);
   release(fd, code, Options::None);
+
+  if (modifiers & Modifiers::LeftShift) {
+    release(fd, KEY_LEFTSHIFT, Options::None);
+  }
+  if (modifiers & Modifiers::RightShift) {
+    release(fd, KEY_RIGHTSHIFT, Options::None);
+  }
+  if (modifiers & Modifiers::LeftAlt) {
+    release(fd, KEY_LEFTALT, Options::None);
+  }
+  if (modifiers & Modifiers::RightAlt) {
+    release(fd, KEY_RIGHTALT, Options::None);
+  }
+  if (modifiers & Modifiers::LeftCtrl) {
+    release(fd, KEY_LEFTCTRL, Options::None);
+  }
+  if (modifiers & Modifiers::RightCtrl) {
+    release(fd, KEY_RIGHTCTRL, Options::None);
+  }
+  if (modifiers & Modifiers::Meta) {
+    release(fd, KEY_OPTION, Options::None);
+  }
+
   if (options & Options::Log) {
     syslog(LOG_DEBUG, "clicked %d", code);
   }
@@ -112,6 +169,19 @@ int main(void) {
 
   supportKey(fd, KEY_SPACE);
   supportKey(fd, KEY_OPTION);
+  supportKey(fd, KEY_LEFTCTRL);
+  supportKey(fd, KEY_RIGHTCTRL);
+  supportKey(fd, KEY_LEFTALT);
+  supportKey(fd, KEY_RIGHTALT);
+  supportKey(fd, KEY_LEFTSHIFT);
+  supportKey(fd, KEY_RIGHTSHIFT);
+  supportKey(fd, KEY_SEMICOLON);
+  supportKey(fd, KEY_COMMA);
+  supportKey(fd, KEY_DOT);
+  supportKey(fd, KEY_SLASH);
+  supportKey(fd, KEY_APOSTROPHE);
+  supportKey(fd, KEY_GRAVE);
+  supportKey(fd, KEY_EQUAL);
   supportKey(fd, KEY_A);
   supportKey(fd, KEY_B);
   supportKey(fd, KEY_C);
