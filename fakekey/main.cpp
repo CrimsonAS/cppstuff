@@ -31,28 +31,6 @@ enum Options {
   SleepAndLog = Sleep | Log,
 };
 
-void press(int fd, int code, Options options = Options::Log) {
-  emit(fd, EV_KEY, code, 1);
-  emit(fd, EV_SYN, SYN_REPORT, 0);
-  if (options & Options::Log) {
-    syslog(LOG_DEBUG, "pressed %d", code);
-  }
-  if (options & Options::Sleep) {
-    usleep(200 * 1000);
-  }
-}
-
-void release(int fd, int code, Options options = Options::Log) {
-  emit(fd, EV_KEY, code, 0);
-  emit(fd, EV_SYN, SYN_REPORT, 0);
-  if (options & Options::Log) {
-    syslog(LOG_DEBUG, "released %d", code);
-  }
-  if (options & Options::Sleep) {
-    usleep(200 * 1000);
-  }
-}
-
 enum Modifiers {
   NoMods = 0x00,
   LeftShift = 0x01,
@@ -64,54 +42,79 @@ enum Modifiers {
   Meta = 0x40,
 };
 
-void click(int fd, int code, Modifiers modifiers = Modifiers::NoMods,
+void press(int fd, int code, Modifiers modifiers = Modifiers::NoMods,
            Options options = Options::Log) {
   if (modifiers & Modifiers::LeftShift) {
-    press(fd, KEY_LEFTSHIFT, Options::None);
+    press(fd, KEY_LEFTSHIFT, Modifiers::NoMods, Options::None);
   }
   if (modifiers & Modifiers::RightShift) {
-    press(fd, KEY_RIGHTSHIFT, Options::None);
+    press(fd, KEY_RIGHTSHIFT, Modifiers::NoMods, Options::None);
   }
   if (modifiers & Modifiers::LeftAlt) {
-    press(fd, KEY_LEFTALT, Options::None);
+    press(fd, KEY_LEFTALT, Modifiers::NoMods, Options::None);
   }
   if (modifiers & Modifiers::RightAlt) {
-    press(fd, KEY_RIGHTALT, Options::None);
+    press(fd, KEY_RIGHTALT, Modifiers::NoMods, Options::None);
   }
   if (modifiers & Modifiers::LeftCtrl) {
-    press(fd, KEY_LEFTCTRL, Options::None);
+    press(fd, KEY_LEFTCTRL, Modifiers::NoMods, Options::None);
   }
   if (modifiers & Modifiers::RightCtrl) {
-    press(fd, KEY_RIGHTCTRL, Options::None);
+    press(fd, KEY_RIGHTCTRL, Modifiers::NoMods, Options::None);
   }
   if (modifiers & Modifiers::Meta) {
-    press(fd, KEY_OPTION, Options::None);
+    press(fd, KEY_OPTION, Modifiers::NoMods, Options::None);
   }
 
-  press(fd, code, Options::None);
-  release(fd, code, Options::None);
+  emit(fd, EV_KEY, code, 1);
+  emit(fd, EV_SYN, SYN_REPORT, 0);
+  if (options & Options::Log) {
+    syslog(LOG_DEBUG, "pressed %d", code);
+  }
+  if (options & Options::Sleep) {
+    usleep(200 * 1000);
+  }
+}
+
+void release(int fd, int code, Modifiers modifiers = Modifiers::NoMods,
+             Options options = Options::Log) {
+  emit(fd, EV_KEY, code, 0);
+  emit(fd, EV_SYN, SYN_REPORT, 0);
 
   if (modifiers & Modifiers::LeftShift) {
-    release(fd, KEY_LEFTSHIFT, Options::None);
+    release(fd, KEY_LEFTSHIFT, Modifiers::NoMods, Options::None);
   }
   if (modifiers & Modifiers::RightShift) {
-    release(fd, KEY_RIGHTSHIFT, Options::None);
+    release(fd, KEY_RIGHTSHIFT, Modifiers::NoMods, Options::None);
   }
   if (modifiers & Modifiers::LeftAlt) {
-    release(fd, KEY_LEFTALT, Options::None);
+    release(fd, KEY_LEFTALT, Modifiers::NoMods, Options::None);
   }
   if (modifiers & Modifiers::RightAlt) {
-    release(fd, KEY_RIGHTALT, Options::None);
+    release(fd, KEY_RIGHTALT, Modifiers::NoMods, Options::None);
   }
   if (modifiers & Modifiers::LeftCtrl) {
-    release(fd, KEY_LEFTCTRL, Options::None);
+    release(fd, KEY_LEFTCTRL, Modifiers::NoMods, Options::None);
   }
   if (modifiers & Modifiers::RightCtrl) {
-    release(fd, KEY_RIGHTCTRL, Options::None);
+    release(fd, KEY_RIGHTCTRL, Modifiers::NoMods, Options::None);
   }
   if (modifiers & Modifiers::Meta) {
-    release(fd, KEY_OPTION, Options::None);
+    release(fd, KEY_OPTION, Modifiers::NoMods, Options::None);
   }
+
+  if (options & Options::Log) {
+    syslog(LOG_DEBUG, "released %d", code);
+  }
+  if (options & Options::Sleep) {
+    usleep(200 * 1000);
+  }
+}
+
+void click(int fd, int code, Modifiers modifiers = Modifiers::NoMods,
+           Options options = Options::Log) {
+  press(fd, code, modifiers);
+  release(fd, code, modifiers);
 
   if (options & Options::Log) {
     syslog(LOG_DEBUG, "clicked %d", code);
@@ -208,6 +211,16 @@ int main(void) {
   supportKey(fd, KEY_X);
   supportKey(fd, KEY_Y);
   supportKey(fd, KEY_Z);
+  supportKey(fd, KEY_1);
+  supportKey(fd, KEY_2);
+  supportKey(fd, KEY_3);
+  supportKey(fd, KEY_4);
+  supportKey(fd, KEY_5);
+  supportKey(fd, KEY_6);
+  supportKey(fd, KEY_7);
+  supportKey(fd, KEY_8);
+  supportKey(fd, KEY_9);
+  supportKey(fd, KEY_0);
 
   memset(&usetup, 0, sizeof(usetup));
   usetup.id.bustype = BUS_USB;
@@ -235,13 +248,103 @@ int main(void) {
   sleep(1);
   syslog(LOG_DEBUG, "awake...");
 
-  // writeSentence(fd);
-  click(fd, KEY_A, Options::SleepAndLog);
+  // +?``
+  // click(fd, KEY_EQUAL, Modifiers::NoMods);
+  // click(fd, KEY_EQUAL, Modifiers::LeftShift);
+  // click(fd, KEY_EQUAL, Modifiers::LeftAlt);
+  // click(fd, KEY_EQUAL, Modifiers(Modifiers::LeftAlt | Modifiers::LeftShift));
+  // usleep(200 * 1000);
+  press(fd, KEY_GRAVE, Modifiers(Modifiers::LeftAlt | Modifiers::LeftShift));
+  click(fd, KEY_U);
+  release(fd, KEY_GRAVE, Modifiers(Modifiers::LeftAlt | Modifiers::LeftShift));
 
-  press(fd, KEY_OPTION);
-  press(fd, KEY_A);
-  release(fd, KEY_OPTION);
-  release(fd, KEY_A, Options::SleepAndLog);
+  // // 1!!''
+  // click(fd, KEY_1, Modifiers::NoMods);
+  // click(fd, KEY_1, Modifiers::LeftShift);
+  // click(fd, KEY_1, Modifiers::RightShift);
+  // click(fd, KEY_1, Modifiers::LeftAlt);
+  // click(fd, KEY_1, Modifiers::RightAlt);
+  // usleep(200 * 1000);
+
+  // // 2""@@
+  // click(fd, KEY_2, Modifiers::NoMods);
+  // click(fd, KEY_2, Modifiers::LeftShift);
+  // click(fd, KEY_2, Modifiers::RightShift);
+  // click(fd, KEY_2, Modifiers::LeftAlt);
+  // click(fd, KEY_2, Modifiers::RightAlt);
+  // usleep(200 * 1000);
+
+  // // 3##
+  // click(fd, KEY_3, Modifiers::NoMods);
+  // click(fd, KEY_3, Modifiers::LeftShift);
+  // click(fd, KEY_3, Modifiers::RightShift);
+  // click(fd, KEY_3, Modifiers::LeftAlt);
+  // click(fd, KEY_3, Modifiers::RightAlt);
+  // usleep(200 * 1000);
+
+  // // 4$$
+  // click(fd, KEY_4, Modifiers::NoMods);
+  // click(fd, KEY_4, Modifiers::LeftShift);
+  // click(fd, KEY_4, Modifiers::RightShift);
+  // click(fd, KEY_4, Modifiers::LeftAlt);
+  // click(fd, KEY_4, Modifiers::RightAlt);
+  // usleep(200 * 1000);
+
+  // // 5%%
+  // click(fd, KEY_5, Modifiers::NoMods);
+  // click(fd, KEY_5, Modifiers::LeftShift);
+  // click(fd, KEY_5, Modifiers::RightShift);
+  // click(fd, KEY_5, Modifiers::LeftAlt);
+  // click(fd, KEY_5, Modifiers::RightAlt);
+  // usleep(200 * 1000);
+
+  // // 6&&
+  // click(fd, KEY_6, Modifiers::NoMods);
+  // click(fd, KEY_6, Modifiers::LeftShift);
+  // click(fd, KEY_6, Modifiers::RightShift);
+  // click(fd, KEY_6, Modifiers::LeftAlt);
+  // click(fd, KEY_6, Modifiers::RightAlt);
+  // usleep(200 * 1000);
+
+  // // 7//
+  // click(fd, KEY_7, Modifiers::NoMods);
+  // click(fd, KEY_7, Modifiers::LeftShift);
+  // click(fd, KEY_7, Modifiers::RightShift);
+  // click(fd, KEY_7, Modifiers::LeftAlt);
+  // click(fd, KEY_7, Modifiers::RightAlt);
+  // usleep(200 * 1000);
+
+  // // 8((
+  // click(fd, KEY_8, Modifiers::NoMods);
+  // click(fd, KEY_8, Modifiers::LeftShift);
+  // click(fd, KEY_8, Modifiers::RightShift);
+  // click(fd, KEY_8, Modifiers::LeftAlt);
+  // click(fd, KEY_8, Modifiers::RightAlt);
+  // usleep(200 * 1000);
+
+  // // 9))
+  // click(fd, KEY_9, Modifiers::NoMods);
+  // click(fd, KEY_9, Modifiers::LeftShift);
+  // click(fd, KEY_9, Modifiers::RightShift);
+  // click(fd, KEY_9, Modifiers::LeftAlt);
+  // click(fd, KEY_9, Modifiers::RightAlt);
+  // usleep(200 * 1000);
+
+  // // 0==
+  // click(fd, KEY_0, Modifiers::NoMods);
+  // click(fd, KEY_0, Modifiers::LeftShift);
+  // click(fd, KEY_0, Modifiers::RightShift);
+  // click(fd, KEY_0, Modifiers::LeftAlt);
+  // click(fd, KEY_0, Modifiers::RightAlt);
+  // usleep(200 * 1000);
+
+  // writeSentence(fd);
+  // click(fd, KEY_A, Modifiers::NoMods, Options::SleepAndLog);
+
+  // press(fd, KEY_OPTION);
+  // press(fd, KEY_A);
+  // release(fd, KEY_OPTION);
+  // release(fd, KEY_A, Options::SleepAndLog);
 
   /*
    * Give userspace some time to read the events before we destroy the
