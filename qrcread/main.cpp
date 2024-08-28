@@ -2,6 +2,7 @@
  * qrcread
  *  A simple tool to get QResources out of a binary
  *
+ * Copyright (c) 2024 Crimson AS <robin.burchell@crimson.no>
  * Copyright (c) 2013 Jolla Ltd. <robin.burchell@jolla.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -23,29 +24,35 @@
  * SOFTWARE.
  */
 
+#include <QDebug>
 #include <dlfcn.h>
 #include <stdio.h>
 #include <sys/errno.h>
-#include <QDebug>
 
-#define protected public // HACK, QResource::children is protected, I'm too lazy to subclass
 #include <QResource>
 
-void recursivelyPrintResource(const QResource &r)
+class ReadableResource : public QResource
 {
-    qDebug() << r.absoluteFilePath();
-    qDebug() << r.children();
+public:
+    using QResource::QResource;
 
-    foreach (const QString &child, r.children()) {
-        QResource aChild(r.absoluteFilePath() + "/" + child);
-        recursivelyPrintResource(aChild);
+    static void recursivelyPrintResource(const ReadableResource& r)
+    {
+        qDebug() << r.absoluteFilePath();
+        qDebug() << r.children();
+
+        foreach (const QString& child, r.children()) {
+            const QResource aChild(r.absoluteFilePath() + "/" + child);
+            recursivelyPrintResource(*reinterpret_cast<const ReadableResource*>(&aChild));
+        }
     }
-}
+};
 
 // NB: we don't have a valid qApp, be careful what parts of Qt you use.
 // It may be possible to create one, I didn't to try avoid interfering with
 // the application loading.
-int main(int argc, char **argv) {
+int main(int argc, char** argv)
+{
     // Assuming the binary is build as a dlopenable shared object, let's try
     // open it and read what's inside. This won't work for all cases, of
     // course, but it'll catch the majority.
@@ -55,12 +62,11 @@ int main(int argc, char **argv) {
     // immediately: qRegisterResourceData is called on binary/library load using
     // Q_CONSTRUCTOR_FUNCTION
     qDebug() << "opening " << argv[1];
-    void *hnd = dlopen(argv[1], RTLD_NOW);
+    void* hnd = dlopen(argv[1], RTLD_NOW);
     qDebug() << "opened " << hnd;
 
     {
-        QResource r("/"); // the root of all evil
-        recursivelyPrintResource(r);
+        ReadableResource r("/"); // the root of all evil
+        ReadableResource::recursivelyPrintResource(r);
     }
 }
-
